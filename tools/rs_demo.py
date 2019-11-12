@@ -26,35 +26,25 @@ parser.add_argument('--video_name', default='', type=str,
 args = parser.parse_args()
 
 
-def get_frames(video_name):
-    if not video_name:
-        cap = cv2.VideoCapture(0)
-        # warmup
-        for i in range(5):
-            cap.read()
-        while True:
-            ret, frame = cap.read()
-            if ret:
-                yield frame
-            else:
-                break
-    elif video_name.endswith('avi') or \
-        video_name.endswith('mp4'):
-        cap = cv2.VideoCapture(args.video_name)
-        while True:
-            ret, frame = cap.read()
-            if ret:
-                yield frame
-            else:
-                break
-    else:
-        images = glob(os.path.join(video_name, '*.jp*'))
-        images = sorted(images,
-                        key=lambda x: int(x.split('/')[-1].split('.')[0]))
-        for img in images:
-            frame = cv2.imread(img)
-            yield frame
+# Configure depth and color streams
+pipeline = rs.pipeline()
+config = rs.config()
+config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+# Start streaming
+pipeline.start(config)
 
+def get_frames():
+    while True:
+        # wait for a coherent pair of frames: depth and color
+        frames = pipeline.wait_for_frames()
+        color_frame = frame.get_color_frame()
+        # convert images to numpy arrarys
+        if color_frame:
+            color_image = np.asanyarray(color_frame.get_data())
+            yield color_image
+        else:
+            break
 
 def main():
     # load config
@@ -77,9 +67,17 @@ def main():
     if args.video_name:
         video_name = args.video_name.split('/')[-1].split('.')[0]
     else:
-        video_name = 'webcam'
+        video_name = 'realsense D435'
     cv2.namedWindow(video_name, cv2.WND_PROP_FULLSCREEN)
-    for frame in get_frames(args.video_name):
+    while True:
+        frames = pipeline.wait_for_frames()
+        color_frame = frames.get_color_frame()
+        depth_frame = frames.get_depth_frame()
+        depth_intrin = depth_frame.profile.as_video_stream_profile().intrinsics
+        # convert image to numpy arrays
+        if color_frame:
+            frame = np.asanyarray(color_frame.get_data())
+
         if first_frame:
             try:
                 init_rect = cv2.selectROI(video_name, frame, False, False)
@@ -102,6 +100,11 @@ def main():
                 cv2.rectangle(frame, (bbox[0], bbox[1]),
                               (bbox[0]+bbox[2], bbox[1]+bbox[3]),
                               (0, 255, 0), 3)
+                x_of_obj = bbox[0]+0.5*bbox[2]
+                y_of_obj = bbox[1]+0.5*bbox[3]
+
+            # depth_3d = depth_frame.get_distance(int(x_of_obj), int(y_of_obj))
+            # point3d = rs.rs2_deproject_pixel_to_point(depth_intrin, depth_pixel, depth_3d)
             cv2.imshow(video_name, frame)
             cv2.waitKey(40)
 
